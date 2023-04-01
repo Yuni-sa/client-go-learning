@@ -87,56 +87,8 @@ func main() {
 			fmt.Printf("Manifest %q applied successfully.\n", manifestPath)
 		}
 
-		// For every pod of the object in the default namespace print the first container image
 		if gvk.Kind == "Deployment" || gvk.Kind == "Pod" {
-			//list, err := resource.List(context.Background(), metav1.ListOptions{FieldSelector: "metadata.name=golang-auth-deployment"})
-
-			list, err := resource.List(context.Background(), metav1.ListOptions{})
-			if err != nil {
-				log.Println(err.Error())
-			} else {
-				for _, item := range list.Items {
-					// Extract the containers slice using unstructured.NestedSlice
-					containers, found, err := unstructured.NestedSlice(item.Object, "spec", "template", "spec", "containers")
-					if err != nil {
-						// Handle the error
-						fmt.Printf("Error extracting containers slice: %v\n", err)
-						return
-					}
-
-					if !found {
-						// Handle the case where the field is not found
-						fmt.Printf("Containers slice not found\n")
-						return
-					}
-
-					// Get the first container in the slice
-					firstContainer, ok := containers[0].(map[string]interface{})
-					if !ok {
-						// Handle the case where the first item in the slice is not a map
-						fmt.Printf("First item in containers slice is not a map\n")
-						return
-					}
-
-					// Extract the container image name from the first container
-					imageName, found, err := unstructured.NestedString(firstContainer, "image")
-					if err != nil {
-						// Handle the error
-						fmt.Printf("Error extracting container image name: %v\n", err)
-						return
-					}
-
-					if !found {
-						// Handle the case where the field is not found
-						fmt.Printf("Container image name field not found\n")
-						return
-					}
-
-					// Print the image name
-					fmt.Println(imageName)
-
-				}
-			}
+			fmt.Println(GetContainerImage(resource, context.Background()))
 		}
 
 		// Delete the manifest
@@ -153,6 +105,56 @@ func main() {
 
 }
 
+// For every pod of the object in the default namespace print the first container image
+func GetContainerImage(resource dynamic.ResourceInterface, ctx context.Context) string {
+	//list, err := resource.List(context.Background(), metav1.ListOptions{FieldSelector: "metadata.name=golang-auth-deployment"})
+
+	list, err := resource.List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return (fmt.Sprintf(err.Error()))
+	} else {
+		for _, item := range list.Items {
+			// Extract the containers slice using unstructured.NestedSlice
+			containers, found, err := unstructured.NestedSlice(item.Object, "spec", "template", "spec", "containers")
+			if err != nil {
+				// Handle the error
+				return (fmt.Sprintf("Error extracting containers slice: %v\n", err))
+
+			}
+
+			if !found {
+				// Handle the case where the field is not found
+				return (fmt.Sprintf("Containers slice not found\n"))
+			}
+
+			// Get the first container in the slice
+			firstContainer, ok := containers[0].(map[string]interface{})
+			if !ok {
+				// Handle the case where the first item in the slice is not a map
+				return (fmt.Sprintf("First item in containers slice is not a map\n"))
+			}
+
+			// Extract the container image name from the first container
+			imageName, found, err := unstructured.NestedString(firstContainer, "image")
+			if err != nil {
+				// Handle the error
+				return (fmt.Sprintf("Error extracting container image name: %v\n", err))
+			}
+
+			if !found {
+				// Handle the case where the field is not found
+				return (fmt.Sprintf("Container image name field not found\n"))
+			}
+
+			// Print the image name
+			return (fmt.Sprintf(imageName))
+
+		}
+	}
+	return ""
+}
+
+// Get the resources
 func GetResources(resource dynamic.ResourceInterface, ctx context.Context, manifestObj *unstructured.Unstructured, gvk schema.GroupVersionKind) {
 	_, err := resource.Get(ctx, manifestObj.GetName(), metav1.GetOptions{})
 	if errors.IsNotFound(err) {
