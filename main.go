@@ -47,134 +47,135 @@ func main() {
 	// Read the manifest file
 	manifestPath := "my-deployment.yaml"
 	manifestBytes, err := os.ReadFile(manifestPath)
+	yamlDocs := strings.Split(string(manifestBytes), "---")
 	if err != nil {
 		panic(err.Error())
 	}
+	for _, yamlDoc := range yamlDocs {
+		if len(strings.TrimSpace(yamlDoc)) == 0 {
+			continue // Skip empty documents
+		}
+		// Decode the manifest into a runtime.Object
+		manifestObj := &unstructured.Unstructured{}
+		if _, _, err := decoder.Decode([]byte(yamlDoc), nil, manifestObj); err != nil {
+			panic(err.Error())
+		}
 
-	// Decode the manifest into a runtime.Object
-	manifestObj := &unstructured.Unstructured{}
-	if _, _, err := decoder.Decode(manifestBytes, nil, manifestObj); err != nil {
-		panic(err.Error())
+		// Get the group, version, and kind from the manifest
+		gvk := manifestObj.GroupVersionKind()
+		namespace := manifestObj.GetNamespace()
+
+		//log.Println(namespace)
+
+		// If no version is specified, use the default values
+		if gvk.Version == "" {
+			gvk.Version = "v1"
+		}
+		// If no namespace is specified, use the default namespace
+		if namespace == "" {
+			namespace = "default"
+		}
+
+		// Get the resource from the dynamic client
+		resource := dynamicClient.Resource(gvk.GroupVersion().WithResource(strings.ToLower(gvk.Kind) + "s")).Namespace(namespace)
+		//log.Println(resource)
+
+		// Apply the manifest
+		_, err = resource.Create(context.Background(), manifestObj, metav1.CreateOptions{})
+		if err != nil {
+			log.Println(err.Error())
+		} else {
+			fmt.Printf("Manifest %q applied successfully.\n", manifestPath)
+		}
+
+		// For every pod of the object in the default namespace print the first container image
+		if gvk.Kind == "Deployment" || gvk.Kind == "Pod" {
+			//list, err := resource.List(context.Background(), metav1.ListOptions{FieldSelector: "metadata.name=golang-auth-deployment"})
+
+			list, err := resource.List(context.Background(), metav1.ListOptions{})
+			if err != nil {
+				log.Println(err.Error())
+			} else {
+				for _, item := range list.Items {
+					// Extract the containers slice using unstructured.NestedSlice
+					containers, found, err := unstructured.NestedSlice(item.Object, "spec", "template", "spec", "containers")
+					if err != nil {
+						// Handle the error
+						fmt.Printf("Error extracting containers slice: %v\n", err)
+						return
+					}
+
+					if !found {
+						// Handle the case where the field is not found
+						fmt.Printf("Containers slice not found\n")
+						return
+					}
+
+					// Get the first container in the slice
+					firstContainer, ok := containers[0].(map[string]interface{})
+					if !ok {
+						// Handle the case where the first item in the slice is not a map
+						fmt.Printf("First item in containers slice is not a map\n")
+						return
+					}
+
+					// Extract the container image name from the first container
+					imageName, found, err := unstructured.NestedString(firstContainer, "image")
+					if err != nil {
+						// Handle the error
+						fmt.Printf("Error extracting container image name: %v\n", err)
+						return
+					}
+
+					if !found {
+						// Handle the case where the field is not found
+						fmt.Printf("Container image name field not found\n")
+						return
+					}
+
+					// Print the image name
+					fmt.Println(imageName)
+
+				}
+			}
+		}
+
+		fmt.Printf("\n")
+		query := ".metadata.labels[\"app\"] == \"ginx\""
+		items, err := GetResourcesByJq(dynamicClient, context.Background(), "apps", "v1", "deployments", namespace, query)
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			for _, item := range items {
+				fmt.Printf("%+v\n", item)
+			}
+		}
+
+		// Delete the manifest
+		err = resource.Delete(context.Background(), manifestObj.GetName(), metav1.DeleteOptions{})
+		if err != nil {
+			log.Println(err.Error())
+		} else {
+			fmt.Printf("Manifest %q deleted successfully.\n", manifestPath)
+		}
+
+		GetResources(resource, context.Background(), manifestObj, gvk)
+
 	}
 
-	// Get the group, version, and kind from the manifest
-	gvk := manifestObj.GroupVersionKind()
-	namespace := manifestObj.GetNamespace()
+}
 
-	//log.Println(namespace)
-
-	// If no version is specified, use the default values
-	if gvk.Version == "" {
-		gvk.Version = "v1"
-	}
-	// If no namespace is specified, use the default namespace
-	if namespace == "" {
-		namespace = "default"
-	}
-
-	// Get the resource from the dynamic client
-	resource := dynamicClient.Resource(gvk.GroupVersion().WithResource(strings.ToLower(gvk.Kind) + "s")).Namespace(namespace)
-	//log.Println(resource)
-
-	// Apply the manifest
-	_, err = resource.Create(context.Background(), manifestObj, metav1.CreateOptions{})
-	if err != nil {
-		log.Println(err.Error())
-	} else {
-		fmt.Printf("Manifest %q applied successfully.\n", manifestPath)
-	}
-
-	_, err = resource.Get(context.Background(), manifestObj.GetName(), metav1.GetOptions{})
+func GetResources(resource dynamic.ResourceInterface, ctx context.Context, manifestObj *unstructured.Unstructured, gvk schema.GroupVersionKind) {
+	_, err := resource.Get(ctx, manifestObj.GetName(), metav1.GetOptions{})
 	if errors.IsNotFound(err) {
-		fmt.Printf("Pod %q not found in default namespace\n", manifestObj.GetName())
+		fmt.Printf("%v %q not found in default namespace\n", gvk.Kind, manifestObj.GetName())
 	} else if statusError, isStatus := err.(*errors.StatusError); isStatus {
-		fmt.Printf("Error getting pod %v\n", statusError.ErrStatus.Message)
+		fmt.Printf("Error getting %v %v\n", gvk.Kind, statusError.ErrStatus.Message)
 	} else if err != nil {
 		panic(err.Error())
 	} else {
-		fmt.Printf("Found %q pod in default namespace\n", manifestObj.GetName())
+		fmt.Printf("Found %q %v in default namespace\n", manifestObj.GetName(), gvk.Kind)
 	}
-
-	//list, err := resource.List(context.Background(), metav1.ListOptions{FieldSelector: "metadata.name=golang-auth-deployment"})
-
-	// For every pod in the default namespace print the first container image
-	list, err := resource.List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		log.Println(err.Error())
-	} else {
-		println(list.Items)
-		for _, item := range list.Items {
-			// Extract the containers slice using unstructured.NestedSlice
-			containers, found, err := unstructured.NestedSlice(item.Object, "spec", "template", "spec", "containers")
-			if err != nil {
-				// Handle the error
-				fmt.Printf("Error extracting containers slice: %v\n", err)
-				return
-			}
-
-			if !found {
-				// Handle the case where the field is not found
-				fmt.Printf("Containers slice not found\n")
-				return
-			}
-
-			// Get the first container in the slice
-			firstContainer, ok := containers[0].(map[string]interface{})
-			if !ok {
-				// Handle the case where the first item in the slice is not a map
-				fmt.Printf("First item in containers slice is not a map\n")
-				return
-			}
-
-			// Extract the container image name from the first container
-			imageName, found, err := unstructured.NestedString(firstContainer, "image")
-			if err != nil {
-				// Handle the error
-				fmt.Printf("Error extracting container image name: %v\n", err)
-				return
-			}
-
-			if !found {
-				// Handle the case where the field is not found
-				fmt.Printf("Container image name field not found\n")
-				return
-			}
-
-			// Print the image name
-			fmt.Println(imageName)
-
-		}
-	}
-
-	fmt.Printf("\n")
-	query := ".metadata.labels[\"app\"] == \"ginx\""
-	items, err := GetResourcesByJq(dynamicClient, context.Background(), "apps", "v1", "deployments", namespace, query)
-	if err != nil {
-		fmt.Println(err)
-	} else {
-		for _, item := range items {
-			fmt.Printf("%+v\n", item)
-		}
-	}
-
-	//err = resource.Delete(context.Background(), manifestObj.GetName(), metav1.DeleteOptions{})
-	//if err != nil {
-	//	log.Println(err.Error())
-	//} else {
-	//	fmt.Printf("Manifest %q deleted successfully.\n", manifestPath)
-	//}
-
-	_, err = resource.Get(context.Background(), manifestObj.GetName(), metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		fmt.Printf("Pod %q not found in default namespace\n", manifestObj.GetName())
-	} else if statusError, isStatus := err.(*errors.StatusError); isStatus {
-		fmt.Printf("Error getting pod %v\n", statusError.ErrStatus.Message)
-	} else if err != nil {
-		panic(err.Error())
-	} else {
-		fmt.Printf("Found %q pod in default namespace\n", manifestObj.GetName())
-	}
-
 }
 
 func GetResourcesByJq(dynamic dynamic.Interface, ctx context.Context, group string,
