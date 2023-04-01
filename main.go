@@ -3,8 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
-	"os"
+	"net/http"
 	"path/filepath"
 	"strings"
 
@@ -44,8 +45,20 @@ func main() {
 	decoder := codecs.UniversalDeserializer()
 
 	// Read the manifest file
-	manifestPath := "my-deployment.yaml"
-	manifestBytes, err := os.ReadFile(manifestPath)
+	//manifestPath := "my-deployment.yaml"
+	//manifestBytes, err := os.ReadFile(manifestPath)
+
+	manifestURL := "https://raw.githubusercontent.com/Yuni-sa/social-hub-manifests/master/dev/golang-auth.yaml"
+	resp, err := http.Get(manifestURL)
+	if err != nil {
+		panic(err.Error())
+	}
+	defer resp.Body.Close()
+	manifestBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		panic(err.Error())
+	}
+
 	yamlDocs := strings.Split(string(manifestBytes), "---")
 	if err != nil {
 		panic(err.Error())
@@ -84,7 +97,7 @@ func main() {
 		if err != nil {
 			log.Println(err.Error())
 		} else {
-			fmt.Printf("Manifest %q applied successfully.\n", manifestPath)
+			fmt.Printf("Manifest %q applied successfully.\n", manifestObj.GetName())
 		}
 
 		if gvk.Kind == "Deployment" || gvk.Kind == "Pod" {
@@ -96,13 +109,14 @@ func main() {
 		if err != nil {
 			log.Println(err.Error())
 		} else {
-			fmt.Printf("Manifest %q deleted successfully.\n", manifestPath)
+			fmt.Printf("Manifest %q deleted successfully.\n", manifestObj.GetName())
 		}
 
 		GetResources(resource, context.Background(), manifestObj, gvk)
 
+		// Print an empty line to create spacing
+		fmt.Println("")
 	}
-
 }
 
 // For every pod of the object in the default namespace print the first container image
